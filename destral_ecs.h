@@ -261,16 +261,37 @@ void de_view_next(de_view* v);
 
 #include <assert.h>
 #include <string.h>
-#include <stdlib.h>
+
+#ifndef de_malloc
+#   include <stdlib.h>
+#   define de_malloc(size) malloc(size)
+#   define de_free(pointer) free(pointer)
+#   define de_realloc(pointer,size) realloc(pointer,size)
+#endif
 
 const de_entity de_null = (de_entity)DE_ENTITY_ID_MASK;
 
 /* Returns the version part of the entity */
-de_entity_ver de_entity_version(de_entity e) { return (de_entity_ver) { .ver = e >> DE_ENTITY_SHIFT }; }
+de_entity_ver de_entity_version(de_entity e) {
+    de_profiling_start();
+    de_entity_ver r = (de_entity_ver) { .ver = e >> DE_ENTITY_SHIFT };
+    de_profiling_end();
+    return r;
+}
 /* Returns the id part of the entity */
-de_entity_id de_entity_identifier(de_entity e) { return (de_entity_id) { .id = e & DE_ENTITY_ID_MASK }; }
+de_entity_id de_entity_identifier(de_entity e) {
+    de_profiling_start();
+    de_entity_id r = (de_entity_id) { .id = e & DE_ENTITY_ID_MASK };
+    de_profiling_end();
+    return r;
+}
 /* Makes a de_entity from entity_id and entity_version */
-de_entity de_make_entity(de_entity_id id, de_entity_ver version) { return id.id | (version.ver << DE_ENTITY_SHIFT); }
+de_entity de_make_entity(de_entity_id id, de_entity_ver version) {
+    de_profiling_start();
+    de_entity r = id.id | (version.ver << DE_ENTITY_SHIFT);
+    de_profiling_end();
+    return r;
+}
 
 
 
@@ -318,7 +339,7 @@ de_entity de_make_entity(de_entity_id id, de_entity_ver version) { return id.id 
     dense         idx:    0    1
     dense     content: [ e3,  e2]
 */
-typedef struct de_sparse {
+typedef struct de_sparse { // TODO: This is a weird name for the struct... de_sparse contains the sparse but also the dense array?
     /*  sparse entity identifiers indices array.
         - index is the de_entity_id. (without version)
         - value is the index of the dense array
@@ -337,60 +358,80 @@ typedef struct de_sparse {
 
 
 static de_sparse* de_sparse_init(de_sparse* s) {
+    de_profiling_start();
     if (s) {
         *s = (de_sparse){ 0 };
         s->sparse = 0;
         s->dense = 0;
     }
+    de_profiling_end();
     return s;
 }
 
 static de_sparse* de_sparse_new() {
-    return de_sparse_init(malloc(sizeof(de_sparse)));
+    de_profiling_start();
+    de_sparse* r = de_sparse_init(de_malloc(sizeof(de_sparse)));
+    de_profiling_end();
+    return r;
 }
 
 static void de_sparse_destroy(de_sparse* s) {
+    de_profiling_start();
     if (s) {
-        free(s->sparse);
-        free(s->dense);
+        de_free(s->sparse);
+        de_free(s->dense);
     }
+    de_profiling_end();
 }
 
 static void de_sparse_delete(de_sparse* s) {
+    de_profiling_start();
     de_sparse_destroy(s);
-    free(s);
+    de_free(s);
+    de_profiling_end();
 }
 
 static bool de_sparse_contains(de_sparse* s, de_entity e) {
+    de_profiling_start();
     assert(s);
+    // TODO: Isn't de_null supposed to be an identifier? so this line should instead be...
+    // assert(de_entity_identifier(e) != de_null);
     assert(e != de_null);
     const de_entity_id eid = de_entity_identifier(e);
-    return (eid.id < s->sparse_size) && (s->sparse[eid.id] != de_null);
+    bool r = (eid.id < s->sparse_size) && (s->sparse[eid.id] != de_null);
+    de_profiling_end();
+    return r;
 }
 
 static size_t de_sparse_index(de_sparse* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     assert(de_sparse_contains(s, e));
-    return s->sparse[de_entity_identifier(e).id];
+    size_t r = s->sparse[de_entity_identifier(e).id];
+    de_profiling_end();
+    return r;
 }
 
 static void de_sparse_emplace(de_sparse* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     assert(e != de_null);
     const de_entity_id eid = de_entity_identifier(e);
     if (eid.id >= s->sparse_size) { // check if we need to realloc
         const size_t new_sparse_size = eid.id + 1;
-        s->sparse = realloc(s->sparse, new_sparse_size * sizeof * s->sparse);
+        s->sparse = de_realloc(s->sparse, new_sparse_size * sizeof * s->sparse);
         memset(s->sparse + s->sparse_size, de_null, (new_sparse_size - s->sparse_size) * sizeof * s->sparse);
         s->sparse_size = new_sparse_size;
     }
     s->sparse[eid.id] = (de_entity)s->dense_size; // set this eid index to the last dense index (dense_size)
-    s->dense = realloc(s->dense, (s->dense_size + 1) * sizeof * s->dense);
+    s->dense = de_realloc(s->dense, (s->dense_size + 1) * sizeof * s->dense);
     s->dense[s->dense_size] = e;
     s->dense_size++;
+    de_profiling_end();
 }
 
 static size_t de_sparse_remove(de_sparse* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     assert(de_sparse_contains(s, e));
 
@@ -401,9 +442,10 @@ static size_t de_sparse_remove(de_sparse* s, de_entity e) {
     s->dense[pos] = other;
     s->sparse[pos] = de_null;
 
-    s->dense = realloc(s->dense, (s->dense_size - 1) * sizeof * s->dense);
+    s->dense = de_realloc(s->dense, (s->dense_size - 1) * sizeof * s->dense);
     s->dense_size--;
 
+    de_profiling_end();
     return pos;
 }
 
@@ -454,35 +496,45 @@ typedef struct de_storage {
 
 
 static de_storage* de_storage_init(de_storage* s, size_t cp_size, size_t cp_id) {
+    de_profiling_start();
     if (s) {
         *s = (de_storage){ 0 };
         de_sparse_init(&s->sparse);
         s->cp_sizeof = cp_size;
         s->cp_id = cp_id;
     }
+    de_profiling_end();
     return s;
 }
 
 static de_storage* de_storage_new(size_t cp_size, size_t cp_id) {
-    return de_storage_init(malloc(sizeof(de_storage)), cp_size, cp_id);
+    de_profiling_start();
+    de_storage* r = de_storage_init(de_malloc(sizeof(de_storage)), cp_size, cp_id);
+    de_profiling_end();
+    return r;
 }
 
 static void de_storage_destroy(de_storage* s) {
+    de_profiling_start();
     if (s) {
         de_sparse_destroy(&s->sparse);
-        free(s->cp_data);
+        de_free(s->cp_data);
     }
+    de_profiling_end();
 }
 
 static void de_storage_delete(de_storage* s) {
+    de_profiling_start();
     de_storage_destroy(s);
-    free(s);
+    de_free(s);
+    de_profiling_end();
 }
 
 static void* de_storage_emplace(de_storage* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     // now allocate the data for the new component at the end of the array
-    s->cp_data = realloc(s->cp_data, (s->cp_data_size + 1) * sizeof(char) * s->cp_sizeof);
+    s->cp_data = de_realloc(s->cp_data, (s->cp_data_size + 1) * sizeof(char) * s->cp_sizeof);
     s->cp_data_size++;
 
     // return the component data pointer (last position)
@@ -491,10 +543,12 @@ static void* de_storage_emplace(de_storage* s, de_entity e) {
     // then add the entity to the sparse set
     de_sparse_emplace(&s->sparse, e);
 
+    de_profiling_end();
     return cp_data_ptr;
 }
 
 static void de_storage_remove(de_storage* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     size_t pos_to_remove = de_sparse_remove(&s->sparse, e);
 
@@ -505,32 +559,45 @@ static void de_storage_remove(de_storage* s, de_entity e) {
         s->cp_sizeof);
 
     // and pop
-    s->cp_data = realloc(s->cp_data, (s->cp_data_size - 1) * sizeof(char) * s->cp_sizeof);
+    s->cp_data = de_realloc(s->cp_data, (s->cp_data_size - 1) * sizeof(char) * s->cp_sizeof);
     s->cp_data_size--;
+    de_profiling_end();
 }
 
 static void* de_storage_get_by_index(de_storage* s, size_t index) {
+    de_profiling_start();
     assert(s);
     assert(index < s->cp_data_size);
-    return &((char*)s->cp_data)[index * sizeof(char) * s->cp_sizeof];
+    void* r = &((char*)s->cp_data)[index * sizeof(char) * s->cp_sizeof];
+    de_profiling_end();
+    return r;
 }
 
 static void* de_storage_get(de_storage* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     assert(e != de_null);
-    return de_storage_get_by_index(s, de_sparse_index(&s->sparse, e));
+    void* r = de_storage_get_by_index(s, de_sparse_index(&s->sparse, e));
+    de_profiling_end();
+    return r;
 }
 
 static void* de_storage_try_get(de_storage* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     assert(e != de_null);
-    return de_sparse_contains(&s->sparse, e) ? de_storage_get(s, e) : 0;
+    void* r = de_sparse_contains(&s->sparse, e) ? de_storage_get(s, e) : 0;
+    de_profiling_end();
+    return r;
 }
 
 static bool de_storage_contains(de_storage* s, de_entity e) {
+    de_profiling_start();
     assert(s);
     assert(e != de_null);
-    return de_sparse_contains(&s->sparse, e);
+    bool r = de_sparse_contains(&s->sparse, e);
+    de_profiling_end();
+    return r;
 }
 
 /*  de_ecs
@@ -547,7 +614,8 @@ typedef struct de_ecs {
 } de_ecs;
 
 de_ecs* de_ecs_make() {
-    de_ecs* r = malloc(sizeof(de_ecs));
+    de_profiling_start();
+    de_ecs* r = de_malloc(sizeof(de_ecs));
     if (r) {
         r->storages = 0;
         r->storages_size = 0;
@@ -555,46 +623,55 @@ de_ecs* de_ecs_make() {
         r->entities_size = 0;
         r->entities = 0;
     }
+    de_profiling_end();
     return r;
 } 
 
 void de_ecs_destroy(de_ecs* r) {
+    de_profiling_start();
     if (r) {
         if (r->storages) {
             for (size_t i = 0; i < r->storages_size; i++) {
                 de_storage_delete(r->storages[i]);
             }
         }
-        free(r->entities);
+        de_free(r->entities);
     }
-    free(r);
+    de_free(r);
+    de_profiling_end();
 }
 
 
 
 bool de_valid(de_ecs* r, de_entity e) {
+    de_profiling_start();
     assert(r);
     const de_entity_id id = de_entity_identifier(e);
-    return id.id < r->entities_size && r->entities[id.id] == e;
+    bool ret = id.id < r->entities_size && r->entities[id.id] == e;
+    de_profiling_end();
+    return ret;
 }
 
 static de_entity _de_generate_entity(de_ecs* r) {
+    de_profiling_start();
     // can't create more identifiers entities
     assert(r->entities_size < DE_ENTITY_ID_MASK);
 
     // alloc one more element to the entities array
-    r->entities = realloc(r->entities, (r->entities_size + 1) * sizeof(de_entity));
+    r->entities = de_realloc(r->entities, (r->entities_size + 1) * sizeof(de_entity));
 
     // create new entity and add it to the array
     const de_entity e = de_make_entity((de_entity_id) {(uint32_t)r->entities_size}, (de_entity_ver) { 0 });
     r->entities[r->entities_size] = e;
     r->entities_size++;
     
+    de_profiling_end();
     return e;
 }
 
 /* internal function to recycle a non used entity from the linked list */
 static de_entity _de_recycle_entity(de_ecs* r) {
+    de_profiling_start();
     assert(r->available_id.id != de_null);
     // get the first available entity id
     const de_entity_id curr_id = r->available_id;
@@ -606,25 +683,33 @@ static de_entity _de_recycle_entity(de_ecs* r) {
     const de_entity recycled_e = de_make_entity(curr_id, curr_ver);
     // assign it to the entities array
     r->entities[curr_id.id] = recycled_e;
+    de_profiling_end();
     return recycled_e;
 }
 
 static void _de_release_entity(de_ecs* r, de_entity e, de_entity_ver desired_version) {
+    de_profiling_start();
     const de_entity_id e_id = de_entity_identifier(e);
     r->entities[e_id.id] = de_make_entity(r->available_id, desired_version);
     r->available_id = e_id;
+    de_profiling_end();
 }
 
 de_entity de_create(de_ecs* r) {
+    de_profiling_start();
     assert(r);
+    de_entity ret;
     if (r->available_id.id == de_null) {
-        return _de_generate_entity(r);
+        ret = _de_generate_entity(r);
     } else {
-        return _de_recycle_entity(r);
+        ret = _de_recycle_entity(r);
     }
+    de_profiling_end();
+    return ret;
 }
 
 de_storage* de_assure(de_ecs* r, de_cp_type cp_type) {
+    de_profiling_start();
     assert(r);
     de_storage* storage_found = 0;
 
@@ -633,19 +718,22 @@ de_storage* de_assure(de_ecs* r, de_cp_type cp_type) {
             storage_found = r->storages[i];
         }
     }
-
+    de_storage* ret;
     if (storage_found) {
-        return storage_found;
+        ret = storage_found;
     } else {
         de_storage* storage_new = de_storage_new(cp_type.cp_sizeof, cp_type.cp_id);
-        r->storages = realloc(r->storages, (r->storages_size + 1) * sizeof * r->storages);
+        r->storages = de_realloc(r->storages, (r->storages_size + 1) * sizeof * r->storages);
         r->storages[r->storages_size] = storage_new;
         r->storages_size++;
-        return storage_new;
+        ret = storage_new;
     }
+    de_profiling_end();
+    return ret;
 }
 
 void de_remove_all(de_ecs* r, de_entity e) {
+    de_profiling_start();
     assert(r);
     assert(de_valid(r, e));
     
@@ -654,15 +742,19 @@ void de_remove_all(de_ecs* r, de_entity e) {
             de_storage_remove(r->storages[i - 1], e);
         }
     }
+    de_profiling_end();
 }
 
 void de_remove(de_ecs* r, de_entity e, de_cp_type cp_type) {
+    de_profiling_start();
     assert(false);
     assert(de_valid(r, e));
     de_storage_remove(de_assure(r, cp_type), e);
+    de_profiling_end();
 }
 
 void de_destroy(de_ecs* r, de_entity e) {
+    de_profiling_start();
     assert(r);
     assert(e != de_null);
 
@@ -673,38 +765,52 @@ void de_destroy(de_ecs* r, de_entity e) {
     de_entity_ver new_version = de_entity_version(e);
     new_version.ver++;
     _de_release_entity(r, e, new_version);
+    de_profiling_end();
 }
 
 bool de_has(de_ecs* r, de_entity e, de_cp_type cp_type) {
+    de_profiling_start();
     assert(r);
     assert(de_valid(r, e));
     assert(de_assure(r, cp_type));
-    return de_storage_contains(de_assure(r, cp_type), e);
+    bool ret = de_storage_contains(de_assure(r, cp_type), e);
+    de_profiling_end();
+    return ret;
 }
 
 void* de_emplace(de_ecs* r, de_entity e, de_cp_type cp_type) {
+    de_profiling_start();
     assert(r);
     assert(de_valid(r, e));
     assert(de_assure(r, cp_type));
-    return de_storage_emplace(de_assure(r, cp_type), e);
+    void* ret = de_storage_emplace(de_assure(r, cp_type), e);
+    de_profiling_end();
+    return ret;
 }
 
 void* de_get(de_ecs* r, de_entity e, de_cp_type cp_type) {
+    de_profiling_start();
     assert(r);
     assert(de_valid(r, e));
     assert(de_assure(r, cp_type));
-    return de_storage_get(de_assure(r, cp_type), e);
+    void* ret = de_storage_get(de_assure(r, cp_type), e);
+    de_profiling_end();
+    return ret;
 }
 
 void* de_try_get(de_ecs* r, de_entity e, de_cp_type cp_type) {
+    de_profiling_start();
     assert(r);
     assert(de_valid(r, e));
     assert(de_assure(r, cp_type));
-    return de_storage_try_get(de_assure(r, cp_type), e);
+    void* ret = de_storage_try_get(de_assure(r, cp_type), e);
+    de_profiling_end();
+    return ret;
 }
 
 
 void de_each(de_ecs* r, void (*fun)(de_ecs*, de_entity, void*), void* udata) {
+    de_profiling_start();
     assert(r);
     if (!fun) {
         return;
@@ -722,19 +828,25 @@ void de_each(de_ecs* r, void (*fun)(de_ecs*, de_entity, void*), void* udata) {
             }
         }
     }
+    de_profiling_end();
 }
 
 bool de_orphan(de_ecs* r, de_entity e) {
+    de_profiling_start();
     assert(r);
     assert(de_valid(r, e));
+    bool ret;
+    ret = true;
     for (size_t pool_i = 0; pool_i < r->storages_size; pool_i++) {
         if (r->storages[pool_i]) {
             if (de_storage_contains(r->storages[pool_i], e)) {
-                return false;
+                ret = false;
+                break;
             }
         }
     }
-    return true;
+    de_profiling_end();
+    return ret;
 }
 
 /* Internal function to iterate orphans*/
@@ -744,19 +856,24 @@ typedef struct de_orphans_fun_data {
 } de_orphans_fun_data;
 
 static void _de_orphans_each_executor(de_ecs* r, de_entity e, void* udata) {
+    de_profiling_start();
     de_orphans_fun_data* orphans_data = udata;
     if (de_orphan(r, e)) {
         orphans_data->orphans_fun(r, e, orphans_data->orphans_udata);
     }
+    de_profiling_end();
 }
 
 void de_orphans_each(de_ecs* r, void (*fun)(de_ecs*, de_entity, void*), void* udata) {
+    de_profiling_start();
     de_each(r, _de_orphans_each_executor, &(de_orphans_fun_data) { .orphans_udata = udata, .orphans_fun = fun });
+    de_profiling_end();
 }
 
 // VIEW SINGLE COMPONENT
 
 de_view_single de_create_view_single(de_ecs* r, de_cp_type cp_type) {
+    de_profiling_start();
     assert(r);
     de_view_single v = { 0 };
     v.pool = de_assure(r, cp_type);
@@ -771,25 +888,36 @@ de_view_single de_create_view_single(de_ecs* r, de_cp_type cp_type) {
         v.current_entity_index = 0;
         v.entity = de_null;
     }
+    de_profiling_end();
     return v;
 }
 
 bool de_view_single_valid(de_view_single* v) {
+    de_profiling_start();
     assert(v);
-    return (v->entity != de_null);
+    bool ret = (v->entity != de_null);
+    de_profiling_end();
+    return ret;
 }
 
 de_entity de_view_single_entity(de_view_single* v) {
+    de_profiling_start();
     assert(v);
-    return v->entity;
+    de_entity ret = v->entity;
+    de_profiling_end();
+    return ret;
 }
 
 void* de_view_single_get(de_view_single* v) {
+    de_profiling_start();
     assert(v);
-    return de_storage_get_by_index(v->pool, v->current_entity_index);
+    void* ret = de_storage_get_by_index(v->pool, v->current_entity_index);
+    de_profiling_end();
+    return ret;
 }
 
 void de_view_single_next(de_view_single* v) {
+    de_profiling_start();
     assert(v);
     if (v->current_entity_index) {
         v->current_entity_index--;
@@ -797,21 +925,26 @@ void de_view_single_next(de_view_single* v) {
     } else {
         v->entity = de_null;
     }
+    de_profiling_end();
 }
 
 
 /// VIEW MULTI COMPONENTS
 
 bool de_view_entity_contained(de_view* v, de_entity e) {
+    de_profiling_start();
     assert(v);
     assert(de_view_valid(v));
-
+    bool ret;
+    ret = true;
     for (size_t pool_id = 0; pool_id < v->pool_count; pool_id++) {
         if (!de_storage_contains(v->all_pools[pool_id], e)) { 
-            return false; 
+            ret = false;
+            break;
         }
     }
-    return true;
+    de_profiling_end();
+    return ret;
 }
 
 size_t de_view_get_index(de_view* v, de_cp_type cp_type) {
@@ -826,17 +959,24 @@ size_t de_view_get_index(de_view* v, de_cp_type cp_type) {
 }
 
 void* de_view_get(de_view* v, de_cp_type cp_type) {
-    return de_view_get_by_index(v, de_view_get_index(v, cp_type));
+    de_profiling_start();
+    void* ret = de_view_get_by_index(v, de_view_get_index(v, cp_type));
+    de_profiling_end();
+    return ret;
 }
 
 void* de_view_get_by_index(de_view* v, size_t pool_index) {
+    de_profiling_start();
     assert(v);
     assert(pool_index >= 0 && pool_index < DE_MAX_VIEW_COMPONENTS);
     assert(de_view_valid(v));
-    return de_storage_get(v->all_pools[pool_index], v->current_entity);
+    void* ret = de_storage_get(v->all_pools[pool_index], v->current_entity);
+    de_profiling_end();
+    return ret;
 }
 
 void de_view_next(de_view* v) {
+    de_profiling_start();
     assert(v);
     assert(de_view_valid(v));
     // find the next contained entity that is inside all pools
@@ -849,10 +989,12 @@ void de_view_next(de_view* v) {
             v->current_entity = de_null;
         }
     } while ((v->current_entity != de_null) && !de_view_entity_contained(v, v->current_entity));
+    de_profiling_end();
 }
 
 
 de_view de_create_view(de_ecs* r, size_t cp_count, de_cp_type *cp_types) {
+    de_profiling_start();
     assert(r);
     assert(cp_count < DE_MAX_VIEW_COMPONENTS);
     
@@ -886,18 +1028,25 @@ de_view de_create_view(de_ecs* r, size_t cp_count, de_cp_type *cp_types) {
         v.current_entity_index = 0;
         v.current_entity = de_null;
     }
+    de_profiling_end();
     return v;
 }
 
 bool de_view_valid(de_view* v) {
+    de_profiling_start();
     assert(v);
-    return v->current_entity != de_null;
+    bool ret = v->current_entity != de_null;
+    de_profiling_end();
+    return ret;
 }
 
 de_entity de_view_entity(de_view* v) {
+    de_profiling_start();
     assert(v);
     assert(de_view_valid(v));
-    return ((de_storage*)v->pool)->sparse.dense[v->current_entity_index];
+    de_entity ret = ((de_storage*)v->pool)->sparse.dense[v->current_entity_index];
+    de_profiling_end();
+    return ret;
 }
 
 #endif // DESTRAL_ECS_IMPL
